@@ -13,17 +13,32 @@ def render_text():
     # Set background color
     canvas.clear(skia.ColorWHITE)
 
-    primary_font =  skia.Font(skia.Typeface.MakeFromFile('./HelveticaNeueLTCom-BdCn.ttf', 0), font_size)
+    # Load primary and emoji fonts
+    primary_font = skia.Font(skia.Typeface.MakeFromFile('./HelveticaNeueLTCom-BdCn.ttf', 0), font_size)
     emoji_font = skia.Font(skia.Typeface.MakeFromFile('NotoColorEmoji-Regular.ttf', 0), font_size)
 
-    # Define font and paint
+    fallback_fonts = [
+        primary_font,
+        emoji_font,
+    ]
+
+    # Create a text blob builder
+    builder = skia.TextBlobBuilder()
     paint = skia.Paint(AntiAlias=True, Color=skia.ColorBLACK)
 
-    # Draw text using helvetica
-    canvas.drawTextBlob(skia.TextBlob.MakeFromString(text, primary_font), 20, 50, paint)
-    
-    # Draw text using emoji font
-    canvas.drawTextBlob(skia.TextBlob.MakeFromString(text, emoji_font), 20, 150, paint)
+    # Manually process each character for font fallback
+    x_offset = 20  # Start position
+    y_offset = 50  # Baseline position
+    for char in text:
+        for font in fallback_fonts:
+            if font.unicharToGlyph(ord(char)) != 0:
+                builder.allocRun(char, font, x_offset, y_offset)
+                x_offset += font.measureText(char)
+                break
+
+    # Draw the built text blob
+    text_blob = builder.make()
+    canvas.drawTextBlob(text_blob, 0, 0, paint)
 
     # Save output to PNG
     image = surface.makeImageSnapshot()
