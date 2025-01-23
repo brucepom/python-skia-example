@@ -1,3 +1,4 @@
+import re
 from typing import Tuple, List
 
 import skia
@@ -18,10 +19,12 @@ def render_text(text: str,
             if font.unicharToGlyph(ord(char)) != 0:
                 curr_font = font
                 break
-        if len(runs) == 0 or runs[-1][1] != curr_font:
+        if len(runs) == 0 or runs[-1][1] != curr_font or runs[-1][-1] == '\n':
+            # print("new", char, '!!!')
             # New run
             runs.append((char, curr_font))
         else:
+            # print("append", char, '!!!')
             # Append to prev run
             runs[-1] = runs[-1][0] + char, runs[-1][1]
 
@@ -36,19 +39,33 @@ def render_text(text: str,
     lines: List[List[Tuple[str, skia.Font]]] = [[]]
     curr_line_width = 0
     for run_text, font in runs:
-        for word in run_text.split(' '):
+        # Regular expression to split and keep the separator attached to the previous word
+        words = re.split(r'(\s|\n)', run_text)
+        # Combine words with their separators
+        words = ["".join(words[i:i + 2]) for i in range(0, len(words), 2) if words[i].strip()]
+        for word in words:
+            new_line_after = False
+            if word.endswith('\n'):
+                new_line_after = True
+                word = word[:-1]
+            new_line_before = False
+            if word.startswith('\n'):
+                new_line_before = True
+                word = word[1:]
+
             curr_line = lines[-1]
-            word_width = font.measureText(word)
-            if len(curr_line) == 0 or word_width + curr_line_width <= max_width:
+            word_width = font.measureText(word.rstrip())
+            if not new_line_before and (len(curr_line) == 0 or word_width + curr_line_width <= max_width):
                 # Continue prev line
                 curr_line.append((word, font))
-                curr_line.append((" ", default_font))
-                curr_line_width += word_width + default_font.measureText(" ")
+                curr_line_width += font.measureText(word)
             else:
                 # Start new line
                 lines.append([(word, font)])
-                curr_line.append((" ", default_font))
-                curr_line_width = word_width + default_font.measureText(" ")
+                curr_line_width = font.measureText(word)
+            if new_line_after:
+                lines.append([])
+                curr_line_width = 0
 
     # Create a Skia surface and canvas
     surface = skia.Surface(canvas_sz[0], canvas_sz[1])
@@ -58,8 +75,13 @@ def render_text(text: str,
 
     # Print each line
     y_offset = y_start
-    for line in lines:
-        print("".join([w for w, f in line]))
+
+    # remove trailing empty line
+    if len(lines) > 0 and len(lines[-1]) == 0:
+        lines = lines[:-1]
+
+    for i, line in enumerate(lines):
+        print(i, "".join([w for w, f in line]))
         x_offset = x_start
         for run_text, font in line:
             # print(run_text)
@@ -80,7 +102,7 @@ def render_text(text: str,
 
 
 if __name__ == "__main__":
-    text = "Hello 😀. Let's celebrate🎉!\n Hello 😀. Let's celebrate🎉!\n"
+    text = "Hello 😀. Let's celebrate🎉!\nHello 😀. Let's celebrate🎉!\n"
     font_size = 30
 
     fonts = ['./HelveticaNeueLTCom-BdCn.ttf', './NotoColorEmoji-Regular.ttf']
