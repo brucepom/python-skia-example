@@ -1,5 +1,5 @@
 import re
-from typing import Tuple, List
+from typing import Tuple, List, Literal
 
 import skia
 
@@ -7,7 +7,8 @@ import skia
 def render_text(text: str,
                 canvas_sz: Tuple[int, int],
                 margins: Tuple[int, int, int, int],
-                fonts: List[skia.Font]):
+                fonts: List[skia.Font],
+                align: Literal['left', 'center', 'right'] = 'left') -> Tuple[bytes, float]:
 
     # Split text into same-font runs
     runs: List[Tuple[str, skia.Font]] = []
@@ -19,12 +20,11 @@ def render_text(text: str,
             if font.unicharToGlyph(ord(char)) != 0:
                 curr_font = font
                 break
-        if len(runs) == 0 or runs[-1][1] != curr_font or runs[-1][-1] == '\n':
-            # print("new", char, '!!!')
+        prev_run = runs[-1] if runs else None
+        if not prev_run or prev_run[1] != curr_font or prev_run[0][-1] == '\n':
             # New run
             runs.append((char, curr_font))
         else:
-            # print("append", char, '!!!')
             # Append to prev run
             runs[-1] = runs[-1][0] + char, runs[-1][1]
 
@@ -32,8 +32,9 @@ def render_text(text: str,
     line_height = fonts[0].getSpacing()
     x_start = margins[0]
     # TODO: better offset?
-    y_start = margins[1] + line_height / 2
+    y_start = margins[1] + line_height
     max_width = canvas_sz[0] - x_start - margins[2]
+    max_height = canvas_sz[1] - y_start - margins[3]
 
     # Split text into lines
     lines: List[List[Tuple[str, skia.Font]]] = [[]]
@@ -73,18 +74,22 @@ def render_text(text: str,
     canvas.clear(skia.ColorWHITE)
     builder = skia.TextBlobBuilder()
 
-    # Print each line
-    y_offset = y_start
-
     # remove trailing empty line
     if len(lines) > 0 and len(lines[-1]) == 0:
         lines = lines[:-1]
 
+    # Print each line
+    y_offset = y_start
     for i, line in enumerate(lines):
-        print(i, "".join([w for w, f in line]))
-        x_offset = x_start
+        print(f"Line {i}", "".join([w for w, f in line]))
+        line_width = sum([f.measureText(t) for t, f in line])
+        if align == 'left':
+            x_offset = x_start
+        elif align == 'center':
+            x_offset = x_start + (max_width - line_width) / 2
+        else:
+            x_offset = max_width - line_width
         for run_text, font in line:
-            # print(run_text)
             builder.allocRun(run_text, font, x_offset, y_offset)
             x_offset += font.measureText(run_text)
         y_offset += line_height
@@ -95,17 +100,38 @@ def render_text(text: str,
     paint = skia.Paint(AntiAlias=True, Color=skia.ColorBLACK)
     canvas.drawTextBlob(text_blob, 0, 0, paint)
 
+    # Debug
+    rect = skia.Rect.MakeXYWH(margins[0], margins[1], max_width, max_height)
+    paint = skia.Paint()
+    paint.setStyle(skia.Paint.kStroke_Style)
+    paint.setColor(skia.ColorRED)
+    canvas.drawRect(rect, paint)
+
     # Save output to PNG
     image = surface.makeImageSnapshot()
-    image.save("output.png", skia.kPNG)
     print("Rendered text saved as 'output.png'")
+    return bytes(image.encodeToData(skia.kPNG, 100)), y_offset + margins[3]
 
 
 if __name__ == "__main__":
-    text = "Hello 😀. Let's celebrate🎉!\nHello 😀. Let's celebrate🎉!\n"
+    long_word = "really_looooooooooooooooooooooooooooooooooong_word_long_word"
+    text = f"Hello 😀. Let's celebrate🎉!\nHello 😀. Let's celebrate🎉!\n\na\nb\nc\n{long_word}"
     font_size = 30
 
     fonts = ['./HelveticaNeueLTCom-BdCn.ttf', './NotoColorEmoji-Regular.ttf']
     fonts = [skia.Font(skia.Typeface.MakeFromFile(f, 0), font_size) for f in fonts]
 
-    render_text(text, (500, 200), (50, 50, 50, 50), fonts)
+    canvas_sz = (600, 400)
+    margins = (10, 50, 10, 50)
+
+    image_bytes, _ = render_text(text, canvas_sz, margins, fonts)
+    with open('output.png', 'wb') as f:
+        f.write(image_bytes)
+
+    image_bytes, _ = render_text(text, canvas_sz, margins, fonts, align='center')
+    with open('output-center.png', 'wb') as f:
+        f.write(image_bytes)
+
+    image_bytes, _ = render_text(text, canvas_sz, margins, fonts, align='right')
+    with open('output-right.png', 'wb') as f:
+        f.write(image_bytes)
