@@ -1,18 +1,35 @@
 import re
-from typing import Tuple, List, Literal
+from typing import Tuple, List, Literal, Generator, Iterable, T
 
 import skia
+
+
+class GeneratorWrapper(Iterable[T]):
+    def __init__(self, generator: Generator[T, None, None]):
+        self.generator = generator
+        self.cache: List[T] = []  # Cache to store already generated items
+
+    def __iter__(self) -> Generator[T, None, None]:
+        # Yield items from the cache first
+        for item in self.cache:
+            yield item
+
+        # Continue generating new items and add them to the cache
+        for item in self.generator:
+            # print("Init " + str(item))
+            self.cache.append(item)
+            yield item
 
 
 def render_text(text: str,
                 canvas_sz: Tuple[int, int],
                 margins: Tuple[int, int, int, int],
-                fonts: List[skia.Font],
+                fonts: Iterable[skia.Font],
                 align: Literal['left', 'center', 'right'] = 'left') -> Tuple[bytes, float]:
 
     # Split text into same-font runs
     runs: List[Tuple[str, skia.Font]] = []
-    default_font = fonts[0]
+    default_font = next(iter(fonts))
     for char in text:
         # Default to first font
         curr_font = default_font
@@ -29,7 +46,7 @@ def render_text(text: str,
             runs[-1] = runs[-1][0] + char, runs[-1][1]
 
     # Compute bbox
-    line_height = fonts[0].getSpacing()
+    line_height = default_font.getSpacing()
     x_start = margins[0]
     # TODO: better offset?
     y_start = margins[1] + line_height
@@ -93,6 +110,7 @@ def render_text(text: str,
             builder.allocRun(run_text, font, x_offset, y_offset)
             x_offset += font.measureText(run_text)
         y_offset += line_height
+    y_offset -= line_height
 
     # Draw the built text blob
     text_blob = builder.make()
@@ -101,25 +119,35 @@ def render_text(text: str,
     canvas.drawTextBlob(text_blob, 0, 0, paint)
 
     # Debug
+    # Bbox
     rect = skia.Rect.MakeXYWH(margins[0], margins[1], max_width, max_height)
     paint = skia.Paint()
     paint.setStyle(skia.Paint.kStroke_Style)
     paint.setColor(skia.ColorRED)
     canvas.drawRect(rect, paint)
+    # Bottom line
+    rect = skia.Rect.MakeXYWH(0, y_offset, canvas_sz[0], 1)
+    paint.setColor(skia.ColorBLUE)
+    canvas.drawRect(rect, paint)
 
     # Save output to PNG
     image = surface.makeImageSnapshot()
     print("Rendered text saved as 'output.png'")
-    return bytes(image.encodeToData(skia.kPNG, 100)), y_offset + margins[3]
+
+    # You may use y_bottom to detect vertical overflow
+    y_bottom = y_offset + margins[3]
+    return bytes(image.encodeToData(skia.kPNG, 100)), y_bottom
 
 
 if __name__ == "__main__":
     long_word = "really_looooooooooooooooooooooooooooooooooong_word_long_word"
     text = f"Hello 😀. Let's celebrate🎉!\nHello 😀. Let's celebrate🎉!\n\na\nb\nc\n{long_word}"
+    # text = "ABC" # default font only
     font_size = 30
 
     fonts = ['./HelveticaNeueLTCom-BdCn.ttf', './NotoColorEmoji-Regular.ttf']
-    fonts = [skia.Font(skia.Typeface.MakeFromFile(f, 0), font_size) for f in fonts]
+    fonts = (skia.Font(skia.Typeface.MakeFromFile(f, 0), font_size) for f in fonts)
+    fonts = GeneratorWrapper(fonts)
 
     canvas_sz = (600, 400)
     margins = (10, 50, 10, 50)
