@@ -4,26 +4,16 @@ import skia
 
 
 def render_text(text: str,
-                font_size: float,
                 canvas_sz: Tuple[int, int],
                 margins: Tuple[int, int, int, int],
                 fonts: List[skia.Font]):
 
-    # Create a Skia surface and canvas
-    surface = skia.Surface(canvas_sz[0], canvas_sz[1])
-    canvas = surface.getCanvas()
-
-    # Set background color
-    canvas.clear(skia.ColorWHITE)
-
-    # Create a text blob builder
-    builder = skia.TextBlobBuilder()
-
     # Split text into same-font runs
     runs: List[Tuple[str, skia.Font]] = []
+    default_font = fonts[0]
     for char in text:
-        # Default to the first font
-        curr_font = fonts[0]
+        # Default to first font
+        curr_font = default_font
         for font in fonts:
             if font.unicharToGlyph(ord(char)) != 0:
                 curr_font = font
@@ -35,13 +25,47 @@ def render_text(text: str,
             # Append to prev run
             runs[-1] = runs[-1][0] + char, runs[-1][1]
 
-    # Print each run
-    x_offset = margins[0]
-    # TODO: better offset
-    y_offset = margins[1] + runs[0][1].getSpacing() / 2
+    # Compute bbox
+    line_height = fonts[0].getSpacing()
+    x_start = margins[0]
+    # TODO: better offset?
+    y_start = margins[1] + line_height / 2
+    max_width = canvas_sz[0] - x_start - margins[2]
+
+    # Split text into lines
+    lines: List[List[Tuple[str, skia.Font]]] = [[]]
+    curr_line_width = 0
     for run_text, font in runs:
-        builder.allocRun(run_text, font, x_offset, y_offset)
-        x_offset += font.measureText(run_text)
+        for word in run_text.split(' '):
+            curr_line = lines[-1]
+            word_width = font.measureText(word)
+            if len(curr_line) == 0 or word_width + curr_line_width <= max_width:
+                # Continue prev line
+                curr_line.append((word, font))
+                curr_line.append((" ", default_font))
+                curr_line_width += word_width + default_font.measureText(" ")
+            else:
+                # Start new line
+                lines.append([(word, font)])
+                curr_line.append((" ", default_font))
+                curr_line_width = word_width + default_font.measureText(" ")
+
+    # Create a Skia surface and canvas
+    surface = skia.Surface(canvas_sz[0], canvas_sz[1])
+    canvas = surface.getCanvas()
+    canvas.clear(skia.ColorWHITE)
+    builder = skia.TextBlobBuilder()
+
+    # Print each line
+    y_offset = y_start
+    for line in lines:
+        print("".join([w for w, f in line]))
+        x_offset = x_start
+        for run_text, font in line:
+            # print(run_text)
+            builder.allocRun(run_text, font, x_offset, y_offset)
+            x_offset += font.measureText(run_text)
+        y_offset += line_height
 
     # Draw the built text blob
     text_blob = builder.make()
@@ -56,10 +80,10 @@ def render_text(text: str,
 
 
 if __name__ == "__main__":
-    text = "Hello 😀. Let's celebrate🎉 !\n Hello 😀. Let's celebrate🎉 !\n"
+    text = "Hello 😀. Let's celebrate🎉!\n Hello 😀. Let's celebrate🎉!\n"
     font_size = 30
 
     fonts = ['./HelveticaNeueLTCom-BdCn.ttf', './NotoColorEmoji-Regular.ttf']
     fonts = [skia.Font(skia.Typeface.MakeFromFile(f, 0), font_size) for f in fonts]
 
-    render_text(text, font_size, (500, 200), (50, 50, 50, 50), fonts)
+    render_text(text, (500, 200), (50, 50, 50, 50), fonts)
