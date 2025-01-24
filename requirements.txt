@@ -1,1 +1,2 @@
 skia-python==132.0b11
+emoji==2.14.1
