@@ -1,6 +1,7 @@
 import re
-from typing import Tuple, List, Literal, Generator, Iterable, T
+from typing import Tuple, List, Literal, Generator, Iterable, T, Dict
 
+import emoji
 import skia
 
 
@@ -27,31 +28,60 @@ def render_text(text: str,
                 fonts: Iterable[skia.Font],
                 align: Literal['left', 'center', 'right'] = 'left') -> Tuple[bytes, float]:
 
+    default_font = next(iter(fonts))
+    # We need some emoji to compute the width
+    always_present_emoji = "😀"
+
+    # Detect multi-character emoji
+    # and handle them separately
+    emoji_start: Dict[int, int] = {}
+    emoji_set = set()
+    emoji_font = default_font
+    for token in iter(emoji.analyze(text)):
+        if len(token.chars) > 1:
+            emoji_set.add(token.chars)
+            emoji_start[token.value.start] = len(token.chars)
+            # print(token.chars, len(token.chars), token.value.start)
+    if len(emoji_set) > 0:
+        for font in fonts:
+            if font.unicharToGlyph(ord(always_present_emoji)) != 0:
+                emoji_font = font
+                break
+
+    def measure_width(text: str, font: skia.Font) -> float:
+        is_emoji = text in emoji_set
+        w = font.measureText(always_present_emoji) if is_emoji else font.measureText(text)
+        return w
+
     # Split text into same-font runs
     runs: List[Tuple[str, skia.Font]] = []
-    default_font = next(iter(fonts))
-    for char in text:
-        # Default to first font
-        curr_font = default_font
-        for font in fonts:
-            if font.unicharToGlyph(ord(char)) != 0:
-                curr_font = font
-                break
-        prev_run = runs[-1] if runs else None
-        if not prev_run or prev_run[1] != curr_font or prev_run[0][-1] == '\n':
-            # New run
-            runs.append((char, curr_font))
+    text_len = len(text)
+    i = 0
+    while i < text_len:
+        if i in emoji_start.keys():
+            emoji_len = emoji_start[i]
+            runs.append((text[i:i+emoji_len], emoji_font))
+            i += emoji_len
         else:
-            # Append to prev run
-            runs[-1] = runs[-1][0] + char, runs[-1][1]
+            char = text[i]
+            # Default to first font
+            curr_font = default_font
+            for font in fonts:
+                if font.unicharToGlyph(ord(char)) != 0:
+                    curr_font = font
+                    break
+            prev_run = runs[-1] if runs else None
+            if not prev_run or prev_run[1] != curr_font or prev_run[0][-1] == '\n':
+                # New run
+                runs.append((char, curr_font))
+            else:
+                # Append to prev run
+                runs[-1] = runs[-1][0] + char, runs[-1][1]
+            i += 1
 
     # Compute bbox
-    line_height = default_font.getSpacing()
     x_start = margins[0]
-    # TODO: better offset?
-    y_start = margins[1] + line_height
     max_width = canvas_sz[0] - x_start - margins[2]
-    max_height = canvas_sz[1] - y_start - margins[3]
 
     # Split text into lines
     lines: List[List[Tuple[str, skia.Font]]] = [[]]
@@ -72,15 +102,15 @@ def render_text(text: str,
                 word = word[1:]
 
             curr_line = lines[-1]
-            word_width = font.measureText(word.rstrip())
+            word_width = measure_width(word.rstrip(), font)
             if not new_line_before and (len(curr_line) == 0 or word_width + curr_line_width <= max_width):
                 # Continue prev line
                 curr_line.append((word, font))
-                curr_line_width += font.measureText(word)
+                curr_line_width += measure_width(word, font)
             else:
                 # Start new line
                 lines.append([(word, font)])
-                curr_line_width = font.measureText(word)
+                curr_line_width = measure_width(word, font)
             if new_line_after:
                 lines.append([])
                 curr_line_width = 0
@@ -95,11 +125,19 @@ def render_text(text: str,
     if len(lines) > 0 and len(lines[-1]) == 0:
         lines = lines[:-1]
 
+    # TODO: better offset?
+    y_start = margins[1]
+    max_height = canvas_sz[1] - y_start - margins[3]
+
     # Print each line
+    paint = skia.Paint(AntiAlias=True, Color=skia.ColorBLACK)
     y_offset = y_start
     for i, line in enumerate(lines):
-        print(f"Line {i}", "".join([w for w, f in line]))
-        line_width = sum([f.measureText(t) for t, f in line])
+        line_width = sum([measure_width(t, f) for t, f in line])
+        line_height = max([f.getSpacing() for _, f in line])
+        y_offset += line_height
+
+        print(f"Line {i}", "".join([w for w, f in line]), line_width)
         if align == 'left':
             x_offset = x_start
         elif align == 'center':
@@ -107,10 +145,15 @@ def render_text(text: str,
         else:
             x_offset = max_width - line_width
         for run_text, font in line:
-            builder.allocRun(run_text, font, x_offset, y_offset)
-            x_offset += font.measureText(run_text)
-        y_offset += line_height
-    y_offset -= line_height
+            is_emoji = run_text in emoji_set
+            if is_emoji:
+                blob = skia.TextBlob.MakeFromShapedText(run_text, font)
+                descent = font.getMetrics().fDescent
+                canvas.drawTextBlob(blob, x_offset, y_offset - line_height + descent, paint)
+                x_offset += measure_width(run_text, font)
+            else:
+                builder.allocRun(run_text, font, x_offset, y_offset)
+                x_offset += measure_width(run_text, font)
 
     # Draw the built text blob
     text_blob = builder.make()
@@ -132,7 +175,6 @@ def render_text(text: str,
 
     # Save output to PNG
     image = surface.makeImageSnapshot()
-    print("Rendered text saved as 'output.png'")
 
     # You may use y_bottom to detect vertical overflow
     y_bottom = y_offset + margins[3]
@@ -141,7 +183,8 @@ def render_text(text: str,
 
 if __name__ == "__main__":
     long_word = "really_looooooooooooooooooooooooooooooooooong_word_long_word"
-    text = f"Hello 😀. Let's celebrate🎉!\nHello 😀. Let's celebrate🎉!\n\na\nb\nc\n{long_word}"
+    painter = "👩🏼‍🎨"
+    text = f"{painter}{painter}\nHello 😀. Let's celebrate🎉!\nHello 😀. Let's celebrate🎉!\n\na\nb\nc\n{long_word}"
     # text = "ABC" # default font only
     font_size = 30
 
